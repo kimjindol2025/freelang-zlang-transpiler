@@ -1,0 +1,4 @@
+/* Z-Lang Transpiler - Module Integration */
+
+pub use crate::lib::Core;
+pub use crate::lib::initialize;

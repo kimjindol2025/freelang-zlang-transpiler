@@ -1,0 +1,20 @@
+/* Z-Lang Transpiler - Tests */
+
+#[test]
+fn test_config_creation() {
+    let config = super::Config::new();
+    assert!(config.enabled);
+    assert_eq!(config.version, "1.0.0");
+}
+
+#[test]
+fn test_initialize() {
+    let config = super::initialize();
+    assert!(config.enabled);
+}
+
+#[test]
+fn test_run() {
+    let result = super::run();
+    assert!(result);
+}
