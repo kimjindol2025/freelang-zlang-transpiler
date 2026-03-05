@@ -1,0 +1,394 @@
+/* Z-Lang Transpiler - Intermediate Representation (IR) Module
+   Phase 2: IR Nodes and Builder (300 lines)
+
+   Converts AST to a language-neutral intermediate representation
+   for semantic analysis and code generation.
+*/
+
+use crate::parser::AstNode;
+
+// IR instruction types
+#[derive(Debug, Clone, PartialEq)]
+pub enum IrInstruction {
+    // Literals
+    LoadInt(i64),
+    LoadFloat(f64),
+    LoadString(String),
+
+    // Variables
+    StoreVar { name: String, value_reg: u32 },
+    LoadVar { name: String, dest_reg: u32 },
+
+    // Operations
+    BinaryOp { op: String, left_reg: u32, right_reg: u32, dest_reg: u32 },
+    UnaryOp { op: String, operand_reg: u32, dest_reg: u32 },
+
+    // Control flow
+    Jump { target: u32 },
+    JumpIfZero { cond_reg: u32, target: u32 },
+    JumpIfNotZero { cond_reg: u32, target: u32 },
+    Label { id: u32 },
+
+    // Function call
+    Call { func_name: String, args: Vec<u32>, dest_reg: u32 },
+    Return { value_reg: Option<u32> },
+
+    // Memory operations
+    Allocate { size: usize, dest_reg: u32 },
+    Load { addr_reg: u32, dest_reg: u32 },
+    Store { addr_reg: u32, value_reg: u32 },
+
+    // Field access
+    FieldAccess { obj_reg: u32, field: String, dest_reg: u32 },
+    Index { obj_reg: u32, idx_reg: u32, dest_reg: u32 },
+
+    // Type conversions
+    Convert { from_type: String, to_type: String, value_reg: u32, dest_reg: u32 },
+}
+
+#[derive(Debug, Clone)]
+pub struct IrBlock {
+    pub id: u32,
+    pub instructions: Vec<IrInstruction>,
+    pub successors: Vec<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrFunction {
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub return_type: Option<String>,
+    pub blocks: Vec<IrBlock>,
+    pub entry_block: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct IrModule {
+    pub functions: Vec<IrFunction>,
+    pub globals: Vec<(String, String)>,
+}
+
+pub struct IrBuilder {
+    current_block_id: u32,
+    current_reg: u32,
+    instructions: Vec<IrInstruction>,
+    blocks: Vec<IrBlock>,
+    symbol_table: std::collections::HashMap<String, u32>,
+}
+
+impl IrBuilder {
+    pub fn new() -> Self {
+        IrBuilder {
+            current_block_id: 0,
+            current_reg: 0,
+            instructions: Vec::new(),
+            blocks: Vec::new(),
+            symbol_table: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn allocate_register(&mut self) -> u32 {
+        let reg = self.current_reg;
+        self.current_reg += 1;
+        reg
+    }
+
+    pub fn allocate_label(&mut self) -> u32 {
+        let label = self.current_block_id;
+        self.current_block_id += 1;
+        label
+    }
+
+    pub fn emit(&mut self, instr: IrInstruction) {
+        self.instructions.push(instr);
+    }
+
+    pub fn emit_load_int(&mut self, value: i64) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::LoadInt(value));
+        dest
+    }
+
+    pub fn emit_load_float(&mut self, value: f64) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::LoadFloat(value));
+        dest
+    }
+
+    pub fn emit_load_string(&mut self, value: String) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::LoadString(value));
+        dest
+    }
+
+    pub fn emit_store_var(&mut self, name: String, value_reg: u32) {
+        self.emit(IrInstruction::StoreVar { name, value_reg });
+        self.symbol_table.insert(name, value_reg);
+    }
+
+    pub fn emit_load_var(&mut self, name: String) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::LoadVar { name, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_binary_op(&mut self, op: String, left_reg: u32, right_reg: u32) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::BinaryOp { op, left_reg, right_reg, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_unary_op(&mut self, op: String, operand_reg: u32) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::UnaryOp { op, operand_reg, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_jump(&mut self, target: u32) {
+        self.emit(IrInstruction::Jump { target });
+    }
+
+    pub fn emit_jump_if_zero(&mut self, cond_reg: u32, target: u32) {
+        self.emit(IrInstruction::JumpIfZero { cond_reg, target });
+    }
+
+    pub fn emit_jump_if_not_zero(&mut self, cond_reg: u32, target: u32) {
+        self.emit(IrInstruction::JumpIfNotZero { cond_reg, target });
+    }
+
+    pub fn emit_label(&mut self, id: u32) {
+        self.emit(IrInstruction::Label { id });
+    }
+
+    pub fn emit_call(&mut self, func_name: String, args: Vec<u32>) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::Call { func_name, args, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_return(&mut self, value_reg: Option<u32>) {
+        self.emit(IrInstruction::Return { value_reg });
+    }
+
+    pub fn emit_allocate(&mut self, size: usize) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::Allocate { size, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_load(&mut self, addr_reg: u32) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::Load { addr_reg, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_store(&mut self, addr_reg: u32, value_reg: u32) {
+        self.emit(IrInstruction::Store { addr_reg, value_reg });
+    }
+
+    pub fn emit_field_access(&mut self, obj_reg: u32, field: String) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::FieldAccess { obj_reg, field, dest_reg: dest });
+        dest
+    }
+
+    pub fn emit_index(&mut self, obj_reg: u32, idx_reg: u32) -> u32 {
+        let dest = self.allocate_register();
+        self.emit(IrInstruction::Index { obj_reg, idx_reg, dest_reg: dest });
+        dest
+    }
+
+    pub fn finalize_block(&mut self, id: u32, successors: Vec<u32>) -> IrBlock {
+        let instructions = std::mem::take(&mut self.instructions);
+        IrBlock {
+            id,
+            instructions,
+            successors,
+        }
+    }
+
+    pub fn build_from_ast(&mut self, ast: &AstNode) -> Result<IrModule, String> {
+        match ast {
+            AstNode::Program(statements) => {
+                let mut functions = Vec::new();
+                let mut globals = Vec::new();
+
+                for stmt in statements {
+                    match stmt {
+                        AstNode::FnDecl { name, params, return_type, body } => {
+                            functions.push(self.build_function(name.clone(), params.clone(), return_type.clone(), body.clone())?);
+                        },
+                        AstNode::VarDecl { name, type_, value } => {
+                            globals.push((name.clone(), type_.clone().unwrap_or("unknown".to_string())));
+                        },
+                        _ => {},
+                    }
+                }
+
+                Ok(IrModule { functions, globals })
+            },
+            _ => Err("Expected program".to_string()),
+        }
+    }
+
+    fn build_function(
+        &mut self,
+        name: String,
+        params: Vec<(String, String)>,
+        return_type: Option<String>,
+        body: Vec<AstNode>,
+    ) -> Result<IrFunction, String> {
+        let entry_block = self.allocate_label();
+        self.emit_label(entry_block);
+
+        for stmt in &body {
+            self.build_statement(stmt)?;
+        }
+
+        let block = self.finalize_block(entry_block, Vec::new());
+        let blocks = vec![block];
+
+        Ok(IrFunction {
+            name,
+            params,
+            return_type,
+            blocks,
+            entry_block,
+        })
+    }
+
+    fn build_statement(&mut self, stmt: &AstNode) -> Result<Option<u32>, String> {
+        match stmt {
+            AstNode::VarDecl { name, type_, value } => {
+                if let Some(expr) = value {
+                    let reg = self.build_expression(expr)?;
+                    self.emit_store_var(name.clone(), reg);
+                    Ok(Some(reg))
+                } else {
+                    Ok(None)
+                }
+            },
+            AstNode::ReturnStmt(expr) => {
+                let value_reg = if let Some(e) = expr {
+                    Some(self.build_expression(e)?)
+                } else {
+                    None
+                };
+                self.emit_return(value_reg);
+                Ok(value_reg)
+            },
+            AstNode::IfStmt { condition, then_body, else_body } => {
+                let cond_reg = self.build_expression(condition)?;
+                let then_label = self.allocate_label();
+                let else_label = self.allocate_label();
+                let end_label = self.allocate_label();
+
+                self.emit_jump_if_not_zero(cond_reg, then_label);
+                self.emit_jump(else_label);
+
+                self.emit_label(then_label);
+                for stmt in then_body {
+                    self.build_statement(stmt)?;
+                }
+                self.emit_jump(end_label);
+
+                self.emit_label(else_label);
+                if let Some(else_stmts) = else_body {
+                    for stmt in else_stmts {
+                        self.build_statement(stmt)?;
+                    }
+                }
+                self.emit_jump(end_label);
+
+                self.emit_label(end_label);
+                Ok(Some(cond_reg))
+            },
+            AstNode::WhileStmt { condition, body } => {
+                let loop_label = self.allocate_label();
+                let end_label = self.allocate_label();
+
+                self.emit_label(loop_label);
+                let cond_reg = self.build_expression(condition)?;
+                self.emit_jump_if_zero(cond_reg, end_label);
+
+                for stmt in body {
+                    self.build_statement(stmt)?;
+                }
+                self.emit_jump(loop_label);
+
+                self.emit_label(end_label);
+                Ok(Some(cond_reg))
+            },
+            _ => Ok(None),
+        }
+    }
+
+    fn build_expression(&mut self, expr: &AstNode) -> Result<u32, String> {
+        match expr {
+            AstNode::IntLiteral(n) => Ok(self.emit_load_int(*n)),
+            AstNode::FloatLiteral(f) => Ok(self.emit_load_float(*f)),
+            AstNode::StringLiteral(s) => Ok(self.emit_load_string(s.clone())),
+            AstNode::Identifier(name) => Ok(self.emit_load_var(name.clone())),
+            AstNode::BinaryOp { left, op, right } => {
+                let left_reg = self.build_expression(left)?;
+                let right_reg = self.build_expression(right)?;
+                Ok(self.emit_binary_op(op.clone(), left_reg, right_reg))
+            },
+            AstNode::UnaryOp { op, operand } => {
+                let operand_reg = self.build_expression(operand)?;
+                Ok(self.emit_unary_op(op.clone(), operand_reg))
+            },
+            AstNode::Call { func, args } => {
+                let func_name = if let AstNode::Identifier(n) = &**func {
+                    n.clone()
+                } else {
+                    return Err("Invalid function call".to_string());
+                };
+
+                let arg_regs: Result<Vec<_>, _> = args.iter().map(|arg| self.build_expression(arg)).collect();
+                Ok(self.emit_call(func_name, arg_regs?))
+            },
+            AstNode::FieldAccess { object, field } => {
+                let obj_reg = self.build_expression(object)?;
+                Ok(self.emit_field_access(obj_reg, field.clone()))
+            },
+            AstNode::Index { object, index } => {
+                let obj_reg = self.build_expression(object)?;
+                let idx_reg = self.build_expression(index)?;
+                Ok(self.emit_index(obj_reg, idx_reg))
+            },
+            _ => Err(format!("Unsupported expression: {:?}", expr)),
+        }
+    }
+}
+
+pub fn print_ir(ir: &IrModule) -> String {
+    let mut output = String::new();
+    output.push_str("IR Module:\n");
+    output.push_str(&format!("  Globals: {:?}\n", ir.globals));
+    output.push_str("  Functions:\n");
+
+    for func in &ir.functions {
+        output.push_str(&format!("    fn {}(", func.name));
+        for (i, (param_name, param_type)) in func.params.iter().enumerate() {
+            if i > 0 { output.push_str(", "); }
+            output.push_str(&format!("{}: {}", param_name, param_type));
+        }
+        output.push_str(")");
+        if let Some(ret_type) = &func.return_type {
+            output.push_str(&format!(" -> {}", ret_type));
+        }
+        output.push_str(" {{\n");
+
+        for block in &func.blocks {
+            output.push_str(&format!("      Block {}:\n", block.id));
+            for instr in &block.instructions {
+                output.push_str(&format!("        {:?}\n", instr));
+            }
+        }
+
+        output.push_str("    }\n");
+    }
+
+    output
+}

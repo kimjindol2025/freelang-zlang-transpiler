@@ -1,0 +1,334 @@
+/* Z-Lang Transpiler - Code Generation Module
+   Phase 2: Z-Lang to FreeLang Transpilation (200 lines)
+
+   Generates FreeLang code from Z-Lang AST and IR.
+*/
+
+use crate::parser::AstNode;
+use crate::ir::{IrModule, IrInstruction};
+
+pub struct CodeGenerator;
+
+impl CodeGenerator {
+    pub fn generate_from_ast(ast: &AstNode) -> Result<String, String> {
+        match ast {
+            AstNode::Program(statements) => {
+                let mut output = String::new();
+                output.push_str("/* Generated from Z-Lang */\n\n");
+
+                for stmt in statements {
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+
+                Ok(output)
+            },
+            _ => Err("Expected program".to_string()),
+        }
+    }
+
+    pub fn generate_from_ir(ir: &IrModule) -> Result<String, String> {
+        let mut output = String::new();
+        output.push_str("/* Generated FreeLang code from Z-Lang IR */\n\n");
+
+        for global in &ir.globals {
+            output.push_str(&format!("let {}: {} = 0;\n", global.0, global.1));
+        }
+
+        if !ir.globals.is_empty() {
+            output.push_str("\n");
+        }
+
+        for func in &ir.functions {
+            output.push_str(&format!("pub fn {}(", func.name));
+
+            for (i, (param_name, param_type)) in func.params.iter().enumerate() {
+                if i > 0 { output.push_str(", "); }
+                output.push_str(&format!("{}: {}", param_name, param_type));
+            }
+
+            output.push_str(")");
+
+            if let Some(ret_type) = &func.return_type {
+                output.push_str(&format!(" -> {}", ret_type));
+            }
+
+            output.push_str(" {{\n");
+
+            // Generate function body from IR blocks
+            for block in &func.blocks {
+                for instr in &block.instructions {
+                    output.push_str(&Self::generate_instruction(instr)?);
+                }
+            }
+
+            output.push_str("}\n\n");
+        }
+
+        Ok(output)
+    }
+
+    fn generate_statement(stmt: &AstNode) -> Result<String, String> {
+        match stmt {
+            AstNode::VarDecl { name, type_, value } => {
+                let mut output = format!("let {}", name);
+                if let Some(t) = type_ {
+                    output.push_str(&format!(": {}", t));
+                }
+                if let Some(val) = value {
+                    output.push_str(&format!(" = {};", Self::generate_expression(val)?));
+                } else {
+                    output.push_str(";");
+                }
+                Ok(output)
+            },
+            AstNode::FnDecl { name, params, return_type, body } => {
+                let mut output = format!("pub fn {}(", name);
+
+                for (i, (pname, ptype)) in params.iter().enumerate() {
+                    if i > 0 { output.push_str(", "); }
+                    output.push_str(&format!("{}: {}", pname, ptype));
+                }
+
+                output.push_str(")");
+                if let Some(ret_type) = return_type {
+                    output.push_str(&format!(" -> {}", ret_type));
+                }
+                output.push_str(" {{\n");
+
+                for stmt in body {
+                    output.push_str("    ");
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+
+                output.push_str("}\n");
+                Ok(output)
+            },
+            AstNode::Block(stmts) => {
+                let mut output = String::from("{\n");
+                for stmt in stmts {
+                    output.push_str("    ");
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+                output.push_str("}");
+                Ok(output)
+            },
+            AstNode::IfStmt { condition, then_body, else_body } => {
+                let mut output = format!("if {} {{\n", Self::generate_expression(condition)?);
+                for stmt in then_body {
+                    output.push_str("    ");
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+                output.push_str("}");
+
+                if let Some(else_stmts) = else_body {
+                    output.push_str(" else {\n");
+                    for stmt in else_stmts {
+                        output.push_str("    ");
+                        output.push_str(&Self::generate_statement(stmt)?);
+                        output.push_str("\n");
+                    }
+                    output.push_str("}");
+                }
+
+                Ok(output)
+            },
+            AstNode::WhileStmt { condition, body } => {
+                let mut output = format!("while {} {{\n", Self::generate_expression(condition)?);
+                for stmt in body {
+                    output.push_str("    ");
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+                output.push_str("}");
+                Ok(output)
+            },
+            AstNode::ForStmt { var, iter, body } => {
+                let mut output = format!("for {} in {} {{\n", var, Self::generate_expression(iter)?);
+                for stmt in body {
+                    output.push_str("    ");
+                    output.push_str(&Self::generate_statement(stmt)?);
+                    output.push_str("\n");
+                }
+                output.push_str("}");
+                Ok(output)
+            },
+            AstNode::ReturnStmt(expr) => {
+                if let Some(e) = expr {
+                    Ok(format!("return {};", Self::generate_expression(e)?))
+                } else {
+                    Ok("return;".to_string())
+                }
+            },
+            _ => Err(format!("Unsupported statement: {:?}", stmt)),
+        }
+    }
+
+    fn generate_expression(expr: &AstNode) -> Result<String, String> {
+        match expr {
+            AstNode::IntLiteral(n) => Ok(format!("{}", n)),
+            AstNode::FloatLiteral(f) => Ok(format!("{}", f)),
+            AstNode::StringLiteral(s) => Ok(format!("\"{}\"", s)),
+            AstNode::Identifier(id) => Ok(id.clone()),
+            AstNode::BinaryOp { left, op, right } => {
+                Ok(format!("({} {} {})",
+                    Self::generate_expression(left)?,
+                    op,
+                    Self::generate_expression(right)?
+                ))
+            },
+            AstNode::UnaryOp { op, operand } => {
+                Ok(format!("{}{}",
+                    op,
+                    Self::generate_expression(operand)?
+                ))
+            },
+            AstNode::Call { func, args } => {
+                let func_name = match &**func {
+                    AstNode::Identifier(name) => name.clone(),
+                    _ => return Err("Invalid function call".to_string()),
+                };
+
+                let mut arg_strs = Vec::new();
+                for arg in args {
+                    arg_strs.push(Self::generate_expression(arg)?);
+                }
+
+                Ok(format!("{}({})", func_name, arg_strs.join(", ")))
+            },
+            AstNode::FieldAccess { object, field } => {
+                Ok(format!("{}.{}", Self::generate_expression(object)?, field))
+            },
+            AstNode::Index { object, index } => {
+                Ok(format!("{}[{}]", Self::generate_expression(object)?, Self::generate_expression(index)?))
+            },
+            _ => Err(format!("Unsupported expression: {:?}", expr)),
+        }
+    }
+
+    fn generate_instruction(instr: &IrInstruction) -> Result<String, String> {
+        match instr {
+            IrInstruction::LoadInt(n) => Ok(format!("    // load_int {}\n", n)),
+            IrInstruction::LoadFloat(f) => Ok(format!("    // load_float {}\n", f)),
+            IrInstruction::LoadString(s) => Ok(format!("    // load_string \"{}\"\n", s)),
+            IrInstruction::StoreVar { name, value_reg } => {
+                Ok(format!("    let {} = r{};\n", name, value_reg))
+            },
+            IrInstruction::LoadVar { name, dest_reg } => {
+                Ok(format!("    let r{} = {};\n", dest_reg, name))
+            },
+            IrInstruction::BinaryOp { op, left_reg, right_reg, dest_reg } => {
+                Ok(format!("    let r{} = r{} {} r{};\n", dest_reg, left_reg, op, right_reg))
+            },
+            IrInstruction::UnaryOp { op, operand_reg, dest_reg } => {
+                Ok(format!("    let r{} = {}r{};\n", dest_reg, op, operand_reg))
+            },
+            IrInstruction::Jump { target } => {
+                Ok(format!("    // jump to block {}\n", target))
+            },
+            IrInstruction::JumpIfZero { cond_reg, target } => {
+                Ok(format!("    // jump_if_zero r{} to block {}\n", cond_reg, target))
+            },
+            IrInstruction::JumpIfNotZero { cond_reg, target } => {
+                Ok(format!("    // jump_if_not_zero r{} to block {}\n", cond_reg, target))
+            },
+            IrInstruction::Label { id } => {
+                Ok(format!("    // label block_{}\n", id))
+            },
+            IrInstruction::Call { func_name, args, dest_reg } => {
+                let arg_str = args.iter().map(|r| format!("r{}", r)).collect::<Vec<_>>().join(", ");
+                Ok(format!("    let r{} = {}({});\n", dest_reg, func_name, arg_str))
+            },
+            IrInstruction::Return { value_reg } => {
+                if let Some(reg) = value_reg {
+                    Ok(format!("    return r{};\n", reg))
+                } else {
+                    Ok("    return;\n".to_string())
+                }
+            },
+            IrInstruction::Allocate { size, dest_reg } => {
+                Ok(format!("    let r{} = alloc({});\n", dest_reg, size))
+            },
+            IrInstruction::Load { addr_reg, dest_reg } => {
+                Ok(format!("    let r{} = *r{};\n", dest_reg, addr_reg))
+            },
+            IrInstruction::Store { addr_reg, value_reg } => {
+                Ok(format!("    *r{} = r{};\n", addr_reg, value_reg))
+            },
+            IrInstruction::FieldAccess { obj_reg, field, dest_reg } => {
+                Ok(format!("    let r{} = r{}.{};\n", dest_reg, obj_reg, field))
+            },
+            IrInstruction::Index { obj_reg, idx_reg, dest_reg } => {
+                Ok(format!("    let r{} = r{}[r{}];\n", dest_reg, obj_reg, idx_reg))
+            },
+            IrInstruction::Convert { from_type, to_type, value_reg, dest_reg } => {
+                Ok(format!("    let r{} = r{} as {}; // {} -> {}\n",
+                    dest_reg, value_reg, to_type, from_type, to_type))
+            },
+        }
+    }
+}
+
+pub struct CodeValidator;
+
+impl CodeValidator {
+    pub fn validate_ast(ast: &AstNode) -> Result<(), String> {
+        match ast {
+            AstNode::Program(statements) => {
+                for stmt in statements {
+                    Self::validate_statement(stmt)?;
+                }
+                Ok(())
+            },
+            _ => Err("Expected program".to_string()),
+        }
+    }
+
+    fn validate_statement(stmt: &AstNode) -> Result<(), String> {
+        match stmt {
+            AstNode::VarDecl { .. } => Ok(()),
+            AstNode::FnDecl { params, .. } => {
+                // Validate parameter types
+                for (_, ptype) in params {
+                    if ptype.is_empty() {
+                        return Err("Parameter type cannot be empty".to_string());
+                    }
+                }
+                Ok(())
+            },
+            AstNode::Block(stmts) => {
+                for s in stmts {
+                    Self::validate_statement(s)?;
+                }
+                Ok(())
+            },
+            AstNode::IfStmt { then_body, else_body, .. } => {
+                for s in then_body {
+                    Self::validate_statement(s)?;
+                }
+                if let Some(else_stmts) = else_body {
+                    for s in else_stmts {
+                        Self::validate_statement(s)?;
+                    }
+                }
+                Ok(())
+            },
+            AstNode::WhileStmt { body, .. } => {
+                for s in body {
+                    Self::validate_statement(s)?;
+                }
+                Ok(())
+            },
+            AstNode::ForStmt { body, .. } => {
+                for s in body {
+                    Self::validate_statement(s)?;
+                }
+                Ok(())
+            },
+            _ => Ok(()),
+        }
+    }
+}

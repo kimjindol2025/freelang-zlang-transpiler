@@ -1,0 +1,412 @@
+/* Z-Lang Transpiler - Phase 2 Tests
+   25+ Test Cases for Parser, IR, and Code Generation
+
+   5 Test Groups:
+   - Group A: Parser Lexer Tests (7 tests)
+   - Group B: Parser AST Tests (6 tests)
+   - Group C: IR Builder Tests (6 tests)
+   - Group D: Code Generation Tests (6 tests)
+*/
+
+use super::parser::{Lexer, Parser, AstNode, TokenType};
+use super::ir::{IrBuilder, IrInstruction};
+use super::codegen::{CodeGenerator, CodeValidator};
+
+// ========== Group A: Lexer Tests ==========
+
+#[test]
+fn test_lexer_integer_literal() {
+    let mut lexer = Lexer::new("42");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::Integer(42)));
+}
+
+#[test]
+fn test_lexer_float_literal() {
+    let mut lexer = Lexer::new("3.14");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::Float(f) if (f - 3.14).abs() < 0.001));
+}
+
+#[test]
+fn test_lexer_string_literal() {
+    let mut lexer = Lexer::new("\"hello\"");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::String(ref s) if s == "hello"));
+}
+
+#[test]
+fn test_lexer_identifier() {
+    let mut lexer = Lexer::new("foo_bar");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::Identifier(ref s) if s == "foo_bar"));
+}
+
+#[test]
+fn test_lexer_keyword() {
+    let mut lexer = Lexer::new("fn");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::Fn));
+}
+
+#[test]
+fn test_lexer_operator() {
+    let mut lexer = Lexer::new("==");
+    let token = lexer.next_token();
+    assert!(matches!(token.token_type, TokenType::EqualEqual));
+}
+
+#[test]
+fn test_lexer_delimiter() {
+    let mut lexer = Lexer::new("{}");
+    let token1 = lexer.next_token();
+    let token2 = lexer.next_token();
+    assert!(matches!(token1.token_type, TokenType::LeftBrace));
+    assert!(matches!(token2.token_type, TokenType::RightBrace));
+}
+
+// ========== Group B: Parser AST Tests ==========
+
+#[test]
+fn test_parser_integer_expression() {
+    let mut parser = Parser::new("42");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_parser_binary_expression() {
+    let mut parser = Parser::new("1 + 2");
+    match parser.parse() {
+        Ok(AstNode::Program(_stmts)) => {
+            // Should parse successfully
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_parser_var_declaration() {
+    let mut parser = Parser::new("let x: i32 = 5;");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+            assert!(matches!(stmts[0], AstNode::VarDecl { ref name, .. } if name == "x"));
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_parser_function_declaration() {
+    let mut parser = Parser::new("fn add(a: i32, b: i32) -> i32 { return a + b; }");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+            assert!(matches!(stmts[0], AstNode::FnDecl { ref name, .. } if name == "add"));
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_parser_if_statement() {
+    let mut parser = Parser::new("if x > 0 { let y = 1; }");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_parser_while_loop() {
+    let mut parser = Parser::new("while x > 0 { x = x - 1; }");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+// ========== Group C: IR Builder Tests ==========
+
+#[test]
+fn test_ir_allocate_register() {
+    let mut builder = IrBuilder::new();
+    let r1 = builder.allocate_register();
+    let r2 = builder.allocate_register();
+    assert_eq!(r1, 0);
+    assert_eq!(r2, 1);
+}
+
+#[test]
+fn test_ir_allocate_label() {
+    let mut builder = IrBuilder::new();
+    let l1 = builder.allocate_label();
+    let l2 = builder.allocate_label();
+    assert_eq!(l1, 0);
+    assert_eq!(l2, 1);
+}
+
+#[test]
+fn test_ir_emit_load_int() {
+    let mut builder = IrBuilder::new();
+    let reg = builder.emit_load_int(42);
+    assert_eq!(reg, 0);
+    assert_eq!(builder.instructions.len(), 1);
+}
+
+#[test]
+fn test_ir_emit_binary_op() {
+    let mut builder = IrBuilder::new();
+    let r1 = builder.emit_load_int(10);
+    let r2 = builder.emit_load_int(20);
+    let r3 = builder.emit_binary_op("+".to_string(), r1, r2);
+    assert_eq!(r3, 2);
+    assert_eq!(builder.instructions.len(), 3);
+}
+
+#[test]
+fn test_ir_emit_store_var() {
+    let mut builder = IrBuilder::new();
+    let reg = builder.emit_load_int(5);
+    builder.emit_store_var("x".to_string(), reg);
+    assert!(builder.symbol_table.contains_key("x"));
+}
+
+#[test]
+fn test_ir_emit_call() {
+    let mut builder = IrBuilder::new();
+    let r1 = builder.emit_load_int(10);
+    let r2 = builder.emit_call("add".to_string(), vec![r1]);
+    assert_eq!(builder.instructions.len(), 3);
+}
+
+// ========== Group D: Code Generation Tests ==========
+
+#[test]
+fn test_codegen_integer_literal() {
+    let ast = AstNode::IntLiteral(42);
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![ast])) {
+        Ok(code) => {
+            assert!(code.contains("Generated from Z-Lang"));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+#[test]
+fn test_codegen_var_declaration() {
+    let stmt = AstNode::VarDecl {
+        name: "x".to_string(),
+        type_: Some("i32".to_string()),
+        value: Some(Box::new(AstNode::IntLiteral(10))),
+    };
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![stmt])) {
+        Ok(code) => {
+            assert!(code.contains("let x: i32"));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+#[test]
+fn test_codegen_function_declaration() {
+    let func = AstNode::FnDecl {
+        name: "test_func".to_string(),
+        params: vec![("a".to_string(), "i32".to_string())],
+        return_type: Some("i32".to_string()),
+        body: vec![],
+    };
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![func])) {
+        Ok(code) => {
+            assert!(code.contains("pub fn test_func"));
+            assert!(code.contains("-> i32"));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+#[test]
+fn test_codegen_binary_operation() {
+    let expr = AstNode::BinaryOp {
+        left: Box::new(AstNode::IntLiteral(5)),
+        op: "+".to_string(),
+        right: Box::new(AstNode::IntLiteral(3)),
+    };
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![expr])) {
+        Ok(code) => {
+            assert!(code.contains("+"));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+#[test]
+fn test_codegen_if_statement() {
+    let if_stmt = AstNode::IfStmt {
+        condition: Box::new(AstNode::BinaryOp {
+            left: Box::new(AstNode::IntLiteral(5)),
+            op: ">".to_string(),
+            right: Box::new(AstNode::IntLiteral(0)),
+        }),
+        then_body: vec![],
+        else_body: None,
+    };
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![if_stmt])) {
+        Ok(code) => {
+            assert!(code.contains("if "));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+// ========== Performance Tests ==========
+
+#[test]
+fn test_parser_performance_large_expression() {
+    let mut code = String::new();
+    for i in 0..100 {
+        if i > 0 { code.push_str(" + "); }
+        code.push_str(&i.to_string());
+    }
+
+    let start = std::time::Instant::now();
+    let mut parser = Parser::new(&code);
+    let _result = parser.parse();
+    let elapsed = start.elapsed();
+
+    // Should parse < 10ms for 1000-line scale
+    assert!(elapsed.as_millis() < 10);
+}
+
+// ========== Validation Tests ==========
+
+#[test]
+fn test_validator_valid_function() {
+    let func = AstNode::FnDecl {
+        name: "test".to_string(),
+        params: vec![("x".to_string(), "i32".to_string())],
+        return_type: Some("i32".to_string()),
+        body: vec![],
+    };
+
+    let result = CodeValidator::validate_ast(&AstNode::Program(vec![func]));
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_validator_invalid_function() {
+    let func = AstNode::FnDecl {
+        name: "test".to_string(),
+        params: vec![("x".to_string(), "".to_string())],
+        return_type: None,
+        body: vec![],
+    };
+
+    let result = CodeValidator::validate_ast(&AstNode::Program(vec![func]));
+    assert!(result.is_err());
+}
+
+// ========== Integration Tests ==========
+
+#[test]
+fn test_integration_parse_and_generate() {
+    let code = "let x: i32 = 42;";
+    let mut parser = Parser::new(code);
+    match parser.parse() {
+        Ok(ast) => {
+            match CodeGenerator::generate_from_ast(&ast) {
+                Ok(generated) => {
+                    assert!(generated.contains("let x: i32"));
+                },
+                _ => panic!("Code generation failed"),
+            }
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_integration_complete_pipeline() {
+    let code = "fn test(a: i32) -> i32 { return a + 1; }";
+    let mut parser = Parser::new(code);
+
+    match parser.parse() {
+        Ok(ast) => {
+            // Validate AST
+            assert!(CodeValidator::validate_ast(&ast).is_ok());
+
+            // Generate code
+            assert!(CodeGenerator::generate_from_ast(&ast).is_ok());
+        },
+        _ => panic!("Pipeline failed"),
+    }
+}
+
+#[test]
+fn test_integration_multiple_statements() {
+    let code = "let x: i32 = 5; let y: i32 = 10; fn add(a: i32, b: i32) -> i32 { return a + b; }";
+    let mut parser = Parser::new(code);
+
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 3);
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+// ========== Edge Case Tests ==========
+
+#[test]
+fn test_parser_empty_function() {
+    let mut parser = Parser::new("fn empty() { }");
+    match parser.parse() {
+        Ok(AstNode::Program(stmts)) => {
+            assert_eq!(stmts.len(), 1);
+        },
+        _ => panic!("Parse failed"),
+    }
+}
+
+#[test]
+fn test_codegen_nested_expressions() {
+    let expr = AstNode::BinaryOp {
+        left: Box::new(AstNode::BinaryOp {
+            left: Box::new(AstNode::IntLiteral(1)),
+            op: "+".to_string(),
+            right: Box::new(AstNode::IntLiteral(2)),
+        }),
+        op: "*".to_string(),
+        right: Box::new(AstNode::IntLiteral(3)),
+    };
+
+    match CodeGenerator::generate_from_ast(&AstNode::Program(vec![expr])) {
+        Ok(code) => {
+            assert!(code.contains("*"));
+            assert!(code.contains("+"));
+        },
+        _ => panic!("Code generation failed"),
+    }
+}
+
+#[test]
+fn test_ir_complex_expression() {
+    let mut builder = IrBuilder::new();
+    let r1 = builder.emit_load_int(10);
+    let r2 = builder.emit_load_int(20);
+    let r3 = builder.emit_binary_op("+".to_string(), r1, r2);
+    let r4 = builder.emit_load_int(2);
+    let r5 = builder.emit_binary_op("*".to_string(), r3, r4);
+
+    assert_eq!(builder.instructions.len(), 5);
+    assert_eq!(r5, 4);
+}
